@@ -1,6 +1,6 @@
 import { chromium } from 'playwright';
 import OpenAI from 'openai';
-import generatePDFfromHTML from './pdf-conversion.js';
+//import generatePDFfromHTML from './pdf-conversion.js';
 import fs from 'fs/promises';
 import { encoding_for_model } from 'tiktoken';
 import {
@@ -116,7 +116,7 @@ ${sampledHtml}
     htmlString,
     outputPath,
   }: GeneratePDFParams): Promise<void> {
-    await generatePDFfromHTML(htmlString, outputPath);
+    //await generatePDFfromHTML(htmlString, outputPath);
     console.log(`✅ PDF saved as ${outputPath}`);
   }
 
