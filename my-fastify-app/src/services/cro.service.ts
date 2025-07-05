@@ -9,7 +9,7 @@ import {
   GeneratePDFParams,
   ScrapePageParams,
   ScrapePageResult,
-} from '../types/cro.types.js';
+} from '../../types/cro.types';
 import dotenv from 'dotenv';
 
 dotenv.config();
