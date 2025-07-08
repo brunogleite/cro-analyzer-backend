@@ -1,18 +1,21 @@
 import { DatabaseConfig, getDatabaseConfig } from '../config/database.config';
 import { AnalysisRepository } from '../repositories/analysis.repository';
+import { UserRepository } from '../repositories/user.repository';
 import sqlite3 from 'sqlite3';
 import { Pool, PoolClient } from 'pg';
 
 export interface DatabaseService {
   getAnalysisRepository(): AnalysisRepository;
+  getUserRepository(): UserRepository;
   healthCheck(): Promise<boolean>;
   close(): Promise<void>;
 }
 
 export class DatabaseServiceImpl implements DatabaseService {
-  private db: any;
-  private config: DatabaseConfig;
+  public db: any;
+  public config: DatabaseConfig;
   private analysisRepository!: AnalysisRepository;
+  private userRepository!: UserRepository;
 
   constructor() {
     this.config = getDatabaseConfig();
@@ -53,6 +56,7 @@ export class DatabaseServiceImpl implements DatabaseService {
       }
 
       this.analysisRepository = new AnalysisRepository(this.db, this.config);
+      this.userRepository = new UserRepository(this.db, this.config);
       
       // Run migrations
       await this.runMigrations();
@@ -68,6 +72,13 @@ export class DatabaseServiceImpl implements DatabaseService {
       throw new Error('Database not initialized. Call initialize() first.');
     }
     return this.analysisRepository;
+  }
+
+  getUserRepository(): UserRepository {
+    if (!this.userRepository) {
+      throw new Error('Database not initialized. Call initialize() first.');
+    }
+    return this.userRepository;
   }
 
   async healthCheck(): Promise<boolean> {
@@ -150,6 +161,32 @@ export class DatabaseServiceImpl implements DatabaseService {
       `
         CREATE INDEX IF NOT EXISTS idx_analyses_url 
         ON analyses(url)
+      `,
+      `
+        CREATE TABLE IF NOT EXISTS users (
+          id TEXT PRIMARY KEY,
+          email TEXT UNIQUE NOT NULL,
+          password TEXT NOT NULL,
+          first_name TEXT NOT NULL,
+          last_name TEXT NOT NULL,
+          role TEXT NOT NULL DEFAULT 'user',
+          is_active BOOLEAN NOT NULL DEFAULT true,
+          last_login_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )
+      `,
+      `
+        CREATE INDEX IF NOT EXISTS idx_users_email 
+        ON users(email)
+      `,
+      `
+        CREATE INDEX IF NOT EXISTS idx_users_role 
+        ON users(role)
+      `,
+      `
+        CREATE INDEX IF NOT EXISTS idx_users_is_active 
+        ON users(is_active)
       `
     ];
 
