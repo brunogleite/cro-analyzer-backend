@@ -9,15 +9,15 @@ import {
 import { v4 as uuidv4 } from 'uuid';
 
 export class AnalysisRepository extends BaseRepository {
-  async create(data: CreateAnalysisRequest): Promise<AnalysisRecord> {
+  async create(data: CreateAnalysisRequest, userId: string): Promise<AnalysisRecord> {
     const id = uuidv4();
     const now = new Date();
     
     const sql = `
       INSERT INTO analyses (
-        id, url, page_title, analysis, pdf_path, metadata, status, 
+        id, user_id, url, page_title, analysis, pdf_path, metadata, status, 
         error_message, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
     
     const metadata = {
@@ -29,6 +29,7 @@ export class AnalysisRepository extends BaseRepository {
 
     await this.execute(sql, [
       id,
+      userId,
       data.url,
       data.pageTitle || null,
       '', // analysis starts empty
@@ -103,6 +104,11 @@ export class AnalysisRepository extends BaseRepository {
     const conditions: string[] = [];
     const params: any[] = [];
 
+    if (filters.userId) {
+      conditions.push('user_id = ?');
+      params.push(filters.userId);
+    }
+
     if (filters.status) {
       conditions.push('status = ?');
       params.push(filters.status);
@@ -139,6 +145,10 @@ export class AnalysisRepository extends BaseRepository {
 
     const rows = await this.query(sql, params);
     return rows.map((row: any) => this.mapRowToRecord(row));
+  }
+
+  async findByUserId(userId: string, filters: Omit<AnalysisFilters, 'userId'> = {}): Promise<AnalysisRecord[]> {
+    return this.find({ ...filters, userId });
   }
 
   async getStats(): Promise<AnalysisStats> {
@@ -178,6 +188,7 @@ export class AnalysisRepository extends BaseRepository {
   private mapRowToRecord(row: any): AnalysisRecord {
     return {
       id: row.id,
+      userId: row.user_id,
       url: row.url,
       pageTitle: row.page_title,
       analysis: row.analysis,

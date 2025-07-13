@@ -55,11 +55,11 @@ export class DatabaseServiceImpl implements DatabaseService {
         console.log('✅ Connected to PostgreSQL database');
       }
 
+      // Run initial migrations (creates tables with proper schema)
+      await this.runMigrations();
+      
       this.analysisRepository = new AnalysisRepository(this.db, this.config);
       this.userRepository = new UserRepository(this.db, this.config);
-      
-      // Run migrations
-      await this.runMigrations();
       
     } catch (error) {
       console.error('❌ Database initialization failed:', error);
@@ -120,7 +120,7 @@ export class DatabaseServiceImpl implements DatabaseService {
     }
   }
 
-  private async execute(sql: string, params: any[] = []): Promise<any> {
+  async execute(sql: string, params: any[] = []): Promise<any> {
     if (this.config.type === 'sqlite') {
       return new Promise((resolve, reject) => {
         this.db.run(sql, params, function(this: any, err: any) {
@@ -134,34 +134,23 @@ export class DatabaseServiceImpl implements DatabaseService {
     }
   }
 
+  async query(sql: string, params: any[] = []): Promise<any[]> {
+    if (this.config.type === 'sqlite') {
+      return new Promise((resolve, reject) => {
+        this.db.all(sql, params, (err: any, rows: any[]) => {
+          if (err) reject(err);
+          else resolve(rows || []);
+        });
+      });
+    } else {
+      const result = await this.db.query(sql, params);
+      return result.rows || [];
+    }
+  }
+
   private async runMigrations(): Promise<void> {
     const migrations = [
-      `
-        CREATE TABLE IF NOT EXISTS analyses (
-          id TEXT PRIMARY KEY,
-          url TEXT NOT NULL,
-          page_title TEXT,
-          analysis TEXT,
-          pdf_path TEXT,
-          metadata TEXT NOT NULL DEFAULT '{}',
-          status TEXT NOT NULL DEFAULT 'pending',
-          error_message TEXT,
-          created_at TEXT NOT NULL,
-          updated_at TEXT NOT NULL
-        )
-      `,
-      `
-        CREATE INDEX IF NOT EXISTS idx_analyses_status 
-        ON analyses(status)
-      `,
-      `
-        CREATE INDEX IF NOT EXISTS idx_analyses_created_at 
-        ON analyses(created_at)
-      `,
-      `
-        CREATE INDEX IF NOT EXISTS idx_analyses_url 
-        ON analyses(url)
-      `,
+      // First create users table
       `
         CREATE TABLE IF NOT EXISTS users (
           id TEXT PRIMARY KEY,
@@ -190,10 +179,197 @@ export class DatabaseServiceImpl implements DatabaseService {
       `
     ];
 
+    // Run user table migrations
     for (const migration of migrations) {
       await this.execute(migration);
     }
 
+    // Handle analyses table with proper migration logic
+    await this.migrateAnalysesTable();
+
     console.log('✅ Database migrations completed');
+  }
+
+  private async migrateAnalysesTable(): Promise<void> {
+    // Check if analyses table exists
+    const tableExists = await this.checkTableExists('analyses');
+    
+    if (!tableExists) {
+      // Create new table with user_id column
+      await this.execute(`
+        CREATE TABLE analyses (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL,
+          url TEXT NOT NULL,
+          page_title TEXT,
+          analysis TEXT,
+          pdf_path TEXT,
+          metadata TEXT NOT NULL DEFAULT '{}',
+          status TEXT NOT NULL DEFAULT 'pending',
+          error_message TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+      `);
+      
+      // Create indexes
+      await this.execute('CREATE INDEX IF NOT EXISTS idx_analyses_user_id ON analyses(user_id)');
+      await this.execute('CREATE INDEX IF NOT EXISTS idx_analyses_status ON analyses(status)');
+      await this.execute('CREATE INDEX IF NOT EXISTS idx_analyses_created_at ON analyses(created_at)');
+      await this.execute('CREATE INDEX IF NOT EXISTS idx_analyses_url ON analyses(url)');
+      
+      console.log('✅ Created new analyses table with user_id column');
+    } else {
+      // Check if user_id column exists
+      const hasUserIdColumn = await this.checkColumnExists('analyses', 'user_id');
+      
+      if (!hasUserIdColumn) {
+        console.log('🔄 Migrating existing analyses table to add user_id column...');
+        
+        // For SQLite, we need to recreate the table since ALTER TABLE is limited
+        if (this.config.type === 'sqlite') {
+          await this.recreateAnalysesTableWithUserId();
+        } else {
+          // For PostgreSQL, we can add the column
+          await this.execute('ALTER TABLE analyses ADD COLUMN user_id TEXT REFERENCES users(id) ON DELETE CASCADE');
+          await this.execute('CREATE INDEX IF NOT EXISTS idx_analyses_user_id ON analyses(user_id)');
+        }
+        
+        console.log('✅ Successfully added user_id column to analyses table');
+      }
+    }
+  }
+
+  private async checkTableExists(tableName: string): Promise<boolean> {
+    if (this.config.type === 'sqlite') {
+      const result = await this.query(
+        `SELECT name FROM sqlite_master WHERE type='table' AND name='${tableName}'`
+      );
+      return result.length > 0;
+    } else {
+      const result = await this.query(
+        "SELECT table_name FROM information_schema.tables WHERE table_name = ?",
+        [tableName]
+      );
+      return result.length > 0;
+    }
+  }
+
+  private async checkColumnExists(tableName: string, columnName: string): Promise<boolean> {
+    if (this.config.type === 'sqlite') {
+      const result = await this.query(
+        `PRAGMA table_info('${tableName}')`
+      );
+      return result.some((row: any) => row.name === columnName);
+    } else {
+      const result = await this.query(
+        `SELECT column_name FROM information_schema.columns 
+         WHERE table_name = ? AND column_name = ?`,
+        [tableName, columnName]
+      );
+      return result.length > 0;
+    }
+  }
+
+  private async recreateAnalysesTableWithUserId(): Promise<void> {
+    // Get existing data
+    let existingData: any[] = [];
+    try {
+      existingData = await this.query('SELECT * FROM analyses');
+    } catch (error) {
+      // Table might not exist or be empty
+      console.log('📝 No existing analyses data to migrate');
+    }
+    
+    // Create a temporary table with the new schema
+    await this.execute(`
+      CREATE TABLE analyses_new (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        url TEXT NOT NULL,
+        page_title TEXT,
+        analysis TEXT,
+        pdf_path TEXT,
+        metadata TEXT NOT NULL DEFAULT '{}',
+        status TEXT NOT NULL DEFAULT 'pending',
+        error_message TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      )
+    `);
+    
+    // Create indexes on the new table
+    await this.execute('CREATE INDEX IF NOT EXISTS idx_analyses_user_id ON analyses_new(user_id)');
+    await this.execute('CREATE INDEX IF NOT EXISTS idx_analyses_status ON analyses_new(status)');
+    await this.execute('CREATE INDEX IF NOT EXISTS idx_analyses_created_at ON analyses_new(created_at)');
+    await this.execute('CREATE INDEX IF NOT EXISTS idx_analyses_url ON analyses_new(url)');
+    
+    // Create a default user for existing analyses if needed
+    const defaultUser = await this.createDefaultUserIfNeeded();
+    
+    // Migrate existing data
+    if (existingData && existingData.length > 0) {
+      console.log(`🔄 Migrating ${existingData.length} existing analyses...`);
+      for (const row of existingData) {
+        await this.execute(`
+          INSERT INTO analyses_new (
+            id, user_id, url, page_title, analysis, pdf_path, metadata, 
+            status, error_message, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, [
+          row.id,
+          defaultUser.id,
+          row.url,
+          row.page_title,
+          row.analysis,
+          row.pdf_path,
+          row.metadata || '{}',
+          row.status || 'pending',
+          row.error_message,
+          row.created_at,
+          row.updated_at
+        ]);
+      }
+      console.log('✅ Existing analyses migrated successfully');
+    }
+    
+    // Drop the old table and rename the new one
+    await this.execute('DROP TABLE analyses');
+    await this.execute('ALTER TABLE analyses_new RENAME TO analyses');
+  }
+
+  private async createDefaultUserIfNeeded(): Promise<any> {
+    // Check if any users exist
+    const users = await this.query('SELECT * FROM users LIMIT 1');
+    
+    if (users.length > 0) {
+      return users[0]; // Return the first user
+    }
+    
+    // Create a default admin user
+    const defaultUserId = 'default-admin-user';
+    const now = new Date().toISOString();
+    
+    await this.execute(`
+      INSERT INTO users (
+        id, email, password, first_name, last_name, role, is_active, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      defaultUserId,
+      'admin@cro-analyzer.com',
+      'default-password-hash', // This should be properly hashed in production
+      'Default',
+      'Admin',
+      'admin',
+      true,
+      now,
+      now
+    ]);
+    
+    console.log('✅ Created default admin user for existing analyses');
+    
+    return { id: defaultUserId };
   }
 } 

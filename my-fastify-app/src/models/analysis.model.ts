@@ -1,5 +1,6 @@
 export interface AnalysisRecord {
   id: string;
+  userId: string;
   url: string;
   pageTitle?: string;
   analysis: string;
@@ -33,6 +34,7 @@ export interface UpdateAnalysisRequest {
 }
 
 export interface AnalysisFilters {
+  userId?: string;
   status?: AnalysisRecord['status'];
   url?: string;
   dateFrom?: Date;

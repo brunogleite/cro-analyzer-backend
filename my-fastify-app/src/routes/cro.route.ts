@@ -15,13 +15,20 @@ export default async function croRoutes(fastify: FastifyInstance) {
         .send({ error: 'Missing required parameter: url' });
     }
 
+    // Check if user is authenticated
+    if (!request.user) {
+      return reply
+        .code(401)
+        .send({ error: 'Authentication required' });
+    }
+
     try {
-      // Create analysis record in database
+      // Create analysis record in database with user ID
       const analysisRepo = fastify.db.getAnalysisRepository();
       const analysisRecord = await analysisRepo.create({
         url: body.url,
         status: 'pending',
-      });
+      }, request.user.userId);
 
       // Update status to processing
       await analysisRepo.update(analysisRecord.id, { status: 'processing' });
@@ -100,9 +107,16 @@ export default async function croRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // Get analysis by ID
+  // Get analysis by ID (user can only access their own analyses)
   fastify.get('/analysis/:id', async (request, reply) => {
     const { id } = request.params as { id: string };
+    
+    // Check if user is authenticated
+    if (!request.user) {
+      return reply
+        .code(401)
+        .send({ error: 'Authentication required' });
+    }
     
     try {
       const analysisRepo = fastify.db.getAnalysisRepository();
@@ -110,6 +124,11 @@ export default async function croRoutes(fastify: FastifyInstance) {
       
       if (!analysis) {
         return reply.code(404).send({ error: 'Analysis not found' });
+      }
+      
+      // Check if the analysis belongs to the authenticated user
+      if (analysis.userId !== request.user.userId) {
+        return reply.code(403).send({ error: 'Access denied' });
       }
       
       return reply.send(analysis);
@@ -121,13 +140,21 @@ export default async function croRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // Get all analyses with optional filters
+  // Get all analyses for the authenticated user with optional filters
   fastify.get('/analyses', async (request, reply) => {
     const query = request.query as any;
+    
+    // Check if user is authenticated
+    if (!request.user) {
+      return reply
+        .code(401)
+        .send({ error: 'Authentication required' });
+    }
     
     try {
       const analysisRepo = fastify.db.getAnalysisRepository();
       const filters = {
+        userId: request.user.userId, // Only get analyses for the authenticated user
         status: query.status,
         url: query.url,
         limit: query.limit ? parseInt(query.limit) : 50,
@@ -144,10 +171,19 @@ export default async function croRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // Get analysis statistics
+  // Get analysis statistics for the authenticated user
   fastify.get('/analyses/stats', async (request, reply) => {
+    // Check if user is authenticated
+    if (!request.user) {
+      return reply
+        .code(401)
+        .send({ error: 'Authentication required' });
+    }
+    
     try {
       const analysisRepo = fastify.db.getAnalysisRepository();
+      // For now, we'll get stats for all analyses, but in the future
+      // we might want to add user-specific stats
       const stats = await analysisRepo.getStats();
       return reply.send(stats);
     } catch (error) {
